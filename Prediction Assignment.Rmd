@@ -1,0 +1,199 @@
+---
+title: "Practical Machine Learning Project"
+author: "DR"
+date: "06 de diciembre de 2019"
+output:
+  html_document: default
+  pdf_document: default
+fig_width: 15
+---
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(warning=FALSE, message=FALSE)
+```
+
+#Introduction
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+```{r, echo=FALSE}
+#load packages:
+library(caret)
+library(corrplot)
+library(rpart)
+library(rpart.plot)
+library(doParallel)
+library(rattle)
+
+#load the training and testing dataset
+setwd("D:/Coursera/Data Science/8. Practical Machine Learning/Week 4/Project")
+```
+
+#The Datasets
+Let's read the datasets and see how the look like
+```{r open files}
+data<-read.csv("pml-training.csv")
+validation<-read.csv("pml-testing.csv")
+
+dim(data)
+dim(validation)
+
+summary(data)
+summary(validation)
+```
+
+As shown above there are 19622 observations and 160 variables in the Training dataset. In the other hand, in the Validation dataset there are 20 observations and 160 variables.
+
+#Cleaning the input data
+
+Next, the data were cleaned  specifically, irrelevant columns (including those with numerous NA values) were removed from the datasets. 
+
+```{r}
+#identify columns where the values are NA within the training dataset
+missingDataTrainingDataSet<-colnames(data)[colSums(is.na(data)) > 0 ]
+
+#remove these columns from the training dataset:
+data<-data[,!(names(data) %in% missingDataTrainingDataSet)]
+
+#need to do the same thing for the validation dataset using column names from training dataset:
+validation<-validation[,!(names(validation) %in% missingDataTrainingDataSet)]
+
+#We should also check to see if there are columns where the values are NA in the validation dataset as well: 
+missingDataValidationDataSet<-colnames(validation)[colSums(is.na(validation)) > 0 ]
+
+#remove these columns from the testing dataset:
+validation<-validation[,!(names(validation) %in% missingDataValidationDataSet)]
+
+#There are another columns within the testing dataset where the values are NA. Will remove these from the training dataset.
+data<-data[,!(names(data) %in% missingDataValidationDataSet)]
+
+#lastly, we're going to remove the first 7 columns of the dataset since they're irrelevant variables for the analysis:
+data<-data[,-c(1:7)] 
+validation<-validation[,-c(1:7)]
+
+#Because this dataset is large (19622 x 160), and a "validation" dataset is supplied I'm dividing the data into a a 60/40 split 
+set.seed(1234)
+inTrain <- createDataPartition(y=data$classe, p=0.6, list=FALSE)
+training <- data[inTrain,]
+testing <- data[-inTrain,]
+
+dim(training)
+dim(testing)
+dim(validation)
+
+```
+
+After all three datasets were cleaned of irrelevant predictor variables, the dimensions were 11776 x 53, 7846 x 53, and 20 x 53 for the training, testing, and validation datasets,respectively. 
+  
+The following correlation plot uses the following parameters "FPC": the first principal component order. "AOE": the angular order tl.cex Numeric, for the size of text label (variable names) tl.col The color of text label.
+
+In the corrplot graph the correlated predictors (variables ) are those with a dark color intersection.
+
+```{r}
+cor_mat <- cor(training[, -53])
+corrplot(cor_mat, order = "FPC", method = "color", type = "upper", 
+         tl.cex = 0.8, tl.col = rgb(0, 0, 0))  
+```
+
+To obtain the names of the variables we use the findCorrelation function to search for highly correlated attributes with a cut off equal to 0.75
+
+```{r}
+highlyCorrelated = findCorrelation(cor_mat, cutoff=0.75)
+names(training)[highlyCorrelated]
+
+```
+
+#Model building
+
+For this project we will use two different algorithms, classification trees and random forests, to predict the outcome.
+
+Next a modelRF was fit to the training dataset. The modelRF was fit using the *random forest* technique, *K fold cross validation* with *k=3* and also utilized parallel processing to cut down on overall modelRF processing time.
+
+```{r modelRF fit, dpi = 200, fig.align = "center", cache=TRUE}
+#load parallel processing package to optimize modelRF fit
+cl <- makeCluster(detectCores())
+registerDoParallel(cl)
+
+set.seed(12345)
+decisionTreeMod1 <- rpart(classe ~ ., data=training, method="class")
+fancyRpartPlot(decisionTreeMod1, main="Decision Tree", sub="")
+```
+
+Predictions were then made using the testing dataset:
+```{r}
+# make predictions
+predictions <- predict(decisionTreeMod1, testing, type = "class")
+#predictions <- predict(modelRF, testing)
+# summarize results 
+confusionMatrixTestingDecisionTree<-confusionMatrix(predictions, testing$classe)
+confusionMatrixTestingDecisionTree
+```
+
+```{r}
+#fit the modelRF using k-cross validation, where k=3
+controlRF <- trainControl(method="cv", number=3, verboseIter=FALSE)
+modelRF <- train(classe~., data=training, method = "rf", trControl = controlRF)
+modelRF$finalModel
+
+```
+
+Finally, the model was fit to the validation dataset and predictions for each "Case" were produced.
+```{r}
+ 
+predictionsTestingRF <- predict(modelRF, testing)
+# summarize results 
+confusionMatrixTestingRF<-confusionMatrix(predictionsTestingRF, testing$classe)
+confusionMatrixTestingRF
+
+predictions_final <- predict(modelRF, validation)
+```
+
+Individual text files were then generated for each "case" prediction (predictions_final) using the below function. Each text file was then uploaded to the Coursera website.
+
+```{r}
+setwd("./Results")
+#predict classe and output to individual files:
+pml_write_files = function(x){
+    n = length(x)
+    for(i in 1:n){
+        filename = paste0("problem_id_",i,".txt")
+        write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+    }
+}
+#write answers to individual files using above functions
+pml_write_files(predictions_final)
+```
+
+
+#Results
+Shown below are the prediction results produced when fitting the model to the testing dataset with the Decision Tree.
+```{r}
+#print modelRF accuracy
+confusionMatrixTestingDecisionTree$overall[1]
+
+#print out of sample error rate:
+OOS<-1-confusionMatrixTestingDecisionTree$overall[1]
+names(OOS)<-"OOS Error Rate"
+OOS
+```
+
+Shown below are the prediction results produced when fitting the model to the testing dataset with the Random Forest.
+```{r}
+#print modelRF accuracy
+confusionMatrixTestingRF$overall[1]
+
+#print out of sample error rate:
+OOS<-1-confusionMatrixTestingRF$overall[1]
+names(OOS)<-"OOS Error Rate"
+OOS
+```
+
+Here, the individual predictions for the validation dataset are shown below.  Accuracy metrics were provided when uploading these predictions to the Coursera Website.
+
+```{r}
+predictions_final
+```
+
+#Conclusion
+The combination of sufficiently cleaning the datasets, using a *random forest* model fit with k-fold cross validations provided a very accurate model; with an Accuracy=0.9909508 and an OOS Error Rate=0.009049197
+  
+#References:
+Ugulino, W.; Cardador, D.; Vega, K.; Velloso, E.; Milidiu, R.; Fuks, H. Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements. Proceedings of 21st Brazilian Symposium on Artificial Intelligence. Advances in Artificial Intelligence - SBIA 2012. In: Lecture Notes in Computer Science. , pp. 52-61. Curitiba, PR: Springer Berlin / Heidelberg, 2012. ISBN 978-3-642-34458-9. DOI: 10.1007/978-3-642-34459-6_6. 
